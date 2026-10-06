@@ -10,21 +10,21 @@
 
   // 6-Stripe Rainbow / Pride Flag Palette
   const PRIDE_COLORS = [
-    { name: 'Red',    r: 255, g: 42,  b: 68  }, // Band 0: Top-Left Diagonal
-    { name: 'Orange', r: 255, g: 138, b: 20  }, // Band 1: Upper-Mid Diagonal
-    { name: 'Yellow', r: 255, g: 228, b: 25  }, // Band 2: Center-Upper Diagonal
-    { name: 'Green',  r: 22,  g: 222, b: 92  }, // Band 3: Center-Lower Diagonal
-    { name: 'Blue',   r: 28,  g: 138, b: 255 }, // Band 4: Lower-Mid Diagonal
-    { name: 'Purple', r: 178, g: 48,  b: 248 }  // Band 5: Bottom-Right Diagonal
+    { name: 'Red',    r: 255, g: 51,  b: 85  }, // Matches '#ff3355'
+    { name: 'Orange', r: 255, g: 145, b: 26  }, // Matches '#ff911a'
+    { name: 'Yellow', r: 255, g: 234, b: 46  }, // Matches '#ffea2e'
+    { name: 'Green',  r: 26,  g: 232, b: 100 }, // Matches '#1ae864'
+    { name: 'Blue',   r: 43,  g: 149, b: 255 }, // Matches '#2b95ff'
+    { name: 'Purple', r: 196, g: 75,  b: 255 }  // Matches '#c44bff'
   ];
 
   const PRIDE_BAND_SOLID_COLORS = [
-    '#ff2a44',
-    '#ff8a14',
-    '#ffe419',
-    '#16de5c',
-    '#1c8aff',
-    '#b230f8'
+    '#ff3355',
+    '#ff911a',
+    '#ffea2e',
+    '#1ae864',
+    '#2b95ff',
+    '#c44bff'
   ];
 
   // Precomputed Line Stroke Styles: 6 bands * 2 distance/depth tiers = 12 buckets
@@ -61,11 +61,14 @@
     minParticles: prefersReducedMotion ? 350 : (isMobile ? 450 : 750),
     maxParticles: prefersReducedMotion ? 500 : (isMobile ? 650 : 1150),
     maxTrailParticles: isMobile ? 40 : 80,
-    repelRadius: 85,
-    repelStrength: 2.2,
-    swirlStrength: 0.65,
-    connectionDistance: 70, // Clean, tight constellation link distance
-    maxLinksPerParticle: 2, // Elegant chains, prevents web crowding
+    repelRadius: 95,          // Interactive cursor push radius
+    repelStrength: 2.6,       // Cursor repulsion impulse strength
+    swirlStrength: 0.35,      // Fluid tangential deflection
+    maxRadius: 850,            // Maximum radius particles can move from their original position
+    returnSpeed: 0.00038,       // Floating return spring strength back to original position
+    damping: 0.90,            // Viscous zero-gravity damping for smooth, calm floating
+    connectionDistance: 70,   // Clean, tight constellation link distance
+    maxLinksPerParticle: 2,   // Elegant chains, prevents web crowding
     constellationRatio: 0.38, // Only ~38% of stars form constellations; remainder are free standalone stars
     cursorGlowRadius: 130
   };
@@ -149,22 +152,32 @@
 
   /**
    * Ambient Floating Particle Class
-   * - Freely moves upward with natural, calm zero-gravity drift & gentle wave oscillation
-   * - Fluidly avoids the cursor when near (never sinking downward)
-   * - Swiftly backfills and returns to upward float so no empty spots remain
+   * - Anchored to original base position with natural zero-gravity wave floating
+   * - Fluidly avoids cursor in all directions (up, down, left, right)
+   * - Constrained to a max displacement radius from its original position
+   * - Gracefully floats back to original position when cursor moves away
    * - Excites and brightens near cursor for radiant interactive feedback
    */
   class AmbientParticle {
     constructor() {
-      this.reset(true);
+      this.reset();
     }
 
-    reset(initial = false) {
+    reset() {
       const w = width || window.innerWidth || 800;
       const h = height || window.innerHeight || 600;
 
-      this.x = randomRange(0, w);
-      this.y = initial ? randomRange(0, h) : (h + randomRange(10, 45));
+      // Original base anchor position on the screen
+      this.baseX = randomRange(0, w);
+      this.baseY = randomRange(0, h);
+      this.baseXRatio = w > 0 ? this.baseX / w : 0.5;
+      this.baseYRatio = h > 0 ? this.baseY / h : 0.5;
+
+      this.x = this.baseX;
+      this.y = this.baseY;
+      this.vx = 0;
+      this.vy = 0;
+
       this.z = randomRange(0.35, 1.0); // 3D depth factor
       this.baseRadius = randomRange(1.1, 2.4) * this.z;
       this.radius = this.baseRadius;
@@ -176,16 +189,13 @@
       // Only a subset of stars are designated constellation nodes; the rest float free with no lines
       this.canConnect = Math.random() < CONFIG.constellationRatio;
 
-      // Natural slow zero-gravity upward drift (calm, hypnotic celestial floating)
-      this.origVx = randomRange(-0.06, 0.06) * this.z;
-      this.origVy = -randomRange(0.08, 0.22) * this.z;
-      this.vx = this.origVx;
-      this.vy = this.origVy;
-
-      // Gentle harmonic wave oscillation
-      this.oscPhase = randomRange(0, Math.PI * 2);
-      this.oscSpeed = randomRange(0.008, 0.016);
-      this.oscAmp = randomRange(0.12, 0.25);
+      // Gentle zero-gravity harmonic wave floating around base anchor
+      this.oscPhaseX = randomRange(0, Math.PI * 2);
+      this.oscPhaseY = randomRange(0, Math.PI * 2);
+      this.oscSpeedX = randomRange(0.007, 0.018);
+      this.oscSpeedY = randomRange(0.006, 0.015);
+      this.oscAmpX = randomRange(4, 10) * this.z;
+      this.oscAmpY = randomRange(4, 10) * this.z;
 
       this.glowBlur = 0;
       this.scrollDy = 0;
@@ -214,10 +224,11 @@
         this.scrollVel = 0;
       }
 
-      // Gentle harmonic wave oscillation
-      this.oscPhase += this.oscSpeed * dt;
-      const oscX = Math.cos(this.oscPhase) * (this.oscAmp * 0.35);
-      const oscY = Math.sin(this.oscPhase * 0.85) * (this.oscAmp * 0.20);
+      // Gentle harmonic wave oscillation around original position
+      this.oscPhaseX += this.oscSpeedX * dt;
+      this.oscPhaseY += this.oscSpeedY * dt;
+      const homeX = this.baseX + Math.cos(this.oscPhaseX) * this.oscAmpX;
+      const homeY = this.baseY + Math.sin(this.oscPhaseY) * this.oscAmpY;
 
       // Pride color band follows diagonal position
       const curW = width || 1;
@@ -226,17 +237,13 @@
       this.band = Math.floor(normD * 6);
       this.bucket = this.band * 3 + this.tier;
 
-      // Fluid cursor avoidance & excitation
-      const now = Date.now();
-      const isMouseStationary = (now - mouse.lastMoveTime > 300);
-      const allowCursorDeflection = mouse.isActive && (!isScrolling || !isMouseStationary);
+      // Fluid cursor avoidance & excitation (full 360°, including downward)
+      const currentY = this.y + this.scrollDy;
+      const dx = this.x - mouse.x;
+      const dy = currentY - mouse.y;
+      const distSq = dx * dx + dy * dy;
 
-      if (allowCursorDeflection) {
-        const currentY = this.y + this.scrollDy;
-        const dx = this.x - mouse.x;
-        const dy = currentY - mouse.y;
-        const distSq = dx * dx + dy * dy;
-
+      if (mouse.isActive) {
         // Proximity excitation within cursor glow radius
         const glowDist = CONFIG.cursorGlowRadius;
         if (distSq < glowDist * glowDist) {
@@ -249,43 +256,43 @@
           this.glowBlur = 0;
         }
 
-        // Active, lively avoidance within expanded radius
+        // Active avoidance within repel radius
         const radius = CONFIG.repelRadius * (0.85 + 0.3 * this.z);
         if (distSq < radius * radius && distSq > 0.01) {
           const dist = Math.sqrt(distSq);
           const ratio = 1 - dist / radius;
-          const force = Math.pow(ratio, 1.1) * CONFIG.repelStrength * (1.15 - this.z * 0.2);
+          const force = Math.pow(ratio, 1.15) * CONFIG.repelStrength * (1.15 - this.z * 0.2);
           const normalX = dx / dist;
           const normalY = dy / dist;
 
-          // Radial push
+          // Radial push in ALL directions (UP, DOWN, LEFT, RIGHT)
           this.vx += normalX * force * 1.35 * dt;
-          this.vy += normalY * force * 1.05 * dt;
+          this.vy += normalY * force * 1.35 * dt;
 
           // Tangential deflection: fluidly parts around cursor like water
           const tangentX = -normalY;
           const tangentY = normalX;
           this.vx += tangentX * force * CONFIG.swirlStrength * dt;
           this.vy += tangentY * force * CONFIG.swirlStrength * dt;
-
-          // Never allow downward velocity so particles NEVER sink down!
-          if (this.vy > 0.08) {
-            this.vy = 0.08;
-          }
-        } else {
-          // Smooth recovery back to calm upward float
-          this.vx += (this.origVx - this.vx) * 0.04 * dt;
-          this.vy += (this.origVy - this.vy) * 0.04 * dt;
         }
       } else {
-        this.vx += (this.origVx - this.vx) * 0.04 * dt;
-        this.vy += (this.origVy - this.vy) * 0.04 * dt;
         this.radius = this.baseRadius;
         this.glowBlur = 0;
       }
 
-      // Max velocity clamp for calm, graceful motion
-      const maxSpeed = 2.4;
+      // Restoring force: gently floats back towards original home position
+      const dispX = this.x - homeX;
+      const dispY = this.y - homeY;
+      this.vx -= dispX * CONFIG.returnSpeed * dt;
+      this.vy -= dispY * CONFIG.returnSpeed * dt;
+
+      // Viscous damping for calm, smooth floating
+      const damping = Math.pow(CONFIG.damping, dt);
+      this.vx *= damping;
+      this.vy *= damping;
+
+      // Velocity clamp for calm, graceful motion
+      const maxSpeed = 3.6;
       const speedSq = this.vx * this.vx + this.vy * this.vy;
       if (speedSq > maxSpeed * maxSpeed) {
         const speed = Math.sqrt(speedSq);
@@ -293,25 +300,37 @@
         this.vy = (this.vy / speed) * maxSpeed;
       }
 
-      // Smooth drag
-      this.vx *= Math.pow(0.95, dt);
-      this.vy *= Math.pow(0.95, dt);
-
       // Integrate position
-      this.x += (this.vx + oscX) * dt;
-      this.y += (this.vy + oscY) * dt;
+      this.x += this.vx * dt;
+      this.y += this.vy * dt;
 
-      // Wrap around edges to maintain continuous uniform field
-      const margin = 40;
-      if (this.x < -margin) this.x = width + margin;
-      else if (this.x > width + margin) this.x = -margin;
+      // Strict max displacement radius constraint from original position
+      const maxR = CONFIG.maxRadius * (0.8 + 0.3 * this.z);
+      const newDispX = this.x - homeX;
+      const newDispY = this.y - homeY;
+      const newDispDist = Math.hypot(newDispX, newDispY);
 
-      if (this.y < -margin) {
-        this.y = height + margin;
-        this.x = randomRange(0, width);
-      } else if (this.y > height + margin) {
-        this.y = -margin;
+      if (newDispDist > maxR && newDispDist > 0.001) {
+        const clampRatio = maxR / newDispDist;
+        this.x = homeX + newDispX * clampRatio;
+        this.y = homeY + newDispY * clampRatio;
+
+        // Eliminate any velocity component directed outward past max radius
+        const unitX = newDispX / newDispDist;
+        const unitY = newDispY / newDispDist;
+        const radialVel = this.vx * unitX + this.vy * unitY;
+        if (radialVel > 0) {
+          this.vx -= unitX * radialVel;
+          this.vy -= unitY * radialVel;
+        }
       }
+
+      // Boundary safety clamp
+      const margin = 20;
+      if (this.x < -margin) this.x = -margin;
+      else if (this.x > curW + margin) this.x = curW + margin;
+      if (this.y < -margin) this.y = -margin;
+      else if (this.y > curH + margin) this.y = curH + margin;
     }
   }
 
@@ -742,6 +761,14 @@
       Math.max(CONFIG.minParticles, Math.floor((width * height) / CONFIG.baseDensityDivisor))
     );
 
+    // Maintain proportional base positions for existing particles on window resize
+    const curLen = ambientParticles.length;
+    for (let i = 0; i < curLen; i++) {
+      const p = ambientParticles[i];
+      p.baseX = p.baseXRatio * width;
+      p.baseY = p.baseYRatio * height;
+    }
+
     while (ambientParticles.length < targetCount) {
       ambientParticles.push(new AmbientParticle());
     }
@@ -964,7 +991,13 @@
       }
       return isRunning;
     },
-    getState: () => ({ isRunning, ambientCount: ambientParticles.length })
+    getState: () => ({ isRunning, ambientCount: ambientParticles.length, config: Object.assign({}, CONFIG) }),
+    setConfig: function(newConfig) {
+      if (typeof newConfig === 'object' && newConfig !== null) {
+        Object.assign(CONFIG, newConfig);
+      }
+      return Object.assign({}, CONFIG);
+    }
   };
 
   // Run on DOM ready
